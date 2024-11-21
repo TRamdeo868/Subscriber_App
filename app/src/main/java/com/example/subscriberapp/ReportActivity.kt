@@ -3,15 +3,14 @@ package com.example.subscriberapp
 import android.os.Bundle
 import android.widget.Button
 import android.widget.TextView
-import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import android.app.DatePickerDialog
+import android.graphics.Color
+import android.util.Log
 import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.android.gms.maps.GoogleMap
 import com.google.android.gms.maps.SupportMapFragment
 import com.google.android.gms.maps.model.LatLng
-import android.app.DatePickerDialog
-import android.graphics.Color
-import android.util.Log
 import com.google.android.gms.maps.model.LatLngBounds
 import com.google.android.gms.maps.model.PolylineOptions
 import java.util.*
@@ -52,7 +51,10 @@ class ReportActivity : AppCompatActivity() {
         mapFragment.getMapAsync { googleMap ->
             map = googleMap
             Log.d("ReportActivity", "Map is ready: $map")
-            loadReport()  // Load report after map is ready
+            // After the map is ready, check if the time range has been selected before drawing the polyline
+            if (startDate > 0 && endDate > 0) {
+                loadReport()
+            }
         }
 
         // Set up the time picker button
@@ -105,7 +107,7 @@ class ReportActivity : AppCompatActivity() {
                 endDate = calendar.timeInMillis
 
                 // After selecting the time range, reload the report
-                loadReport()
+                loadReport()  // Load the report only after both start and end dates are chosen
             },
             calendar.get(Calendar.YEAR),
             calendar.get(Calendar.MONTH),
@@ -147,4 +149,5 @@ class ReportActivity : AppCompatActivity() {
         val bounds = builder.build()
         map.moveCamera(CameraUpdateFactory.newLatLngBounds(bounds, 100))  // Add padding
     }
+
 }

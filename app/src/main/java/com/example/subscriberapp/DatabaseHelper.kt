@@ -158,4 +158,22 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
         cursor.close()
         return devices
     }
+
+    // New method to fetch location data for a device (studentId) without time range
+    fun getLocationDataForDevice(studentId: String): List<LocationData> {
+        val db: SQLiteDatabase = this.readableDatabase
+        val cursor: Cursor = db.rawQuery(
+            "SELECT latitude, longitude FROM $TABLE_NAME WHERE $COL_STUDENT_ID = ? ORDER BY $COL_TIMESTAMP ASC",
+            arrayOf(studentId)
+        )
+
+        val locationDataList = mutableListOf<LocationData>()
+        while (cursor.moveToNext()) {
+            val latitude = cursor.getDouble(cursor.getColumnIndexOrThrow("latitude"))
+            val longitude = cursor.getDouble(cursor.getColumnIndexOrThrow("longitude"))
+            locationDataList.add(LocationData(latitude, longitude))
+        }
+        cursor.close()
+        return locationDataList
+    }
 }

@@ -8,10 +8,12 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.android.gms.maps.GoogleMap
 import com.google.android.gms.maps.OnMapReadyCallback
 import com.google.android.gms.maps.SupportMapFragment
 import com.google.android.gms.maps.model.LatLng
+import com.google.android.gms.maps.model.LatLngBounds
 import com.google.android.gms.maps.model.PolylineOptions
 import com.hivemq.client.mqtt.MqttGlobalPublishFilter
 import com.hivemq.client.mqtt.mqtt5.Mqtt5BlockingClient
@@ -23,14 +25,12 @@ import java.util.UUID
 class MainActivity : AppCompatActivity(), OnMapReadyCallback {
 
     private var client: Mqtt5BlockingClient? = null
-    private lateinit var mapManager: MapManager
     private lateinit var googleMap: GoogleMap
     private lateinit var databaseHelper: DatabaseHelper
     private lateinit var recyclerView: RecyclerView
     private lateinit var deviceAdapter: DeviceAdapter
 
     private lateinit var deviceList: List<Device>
-
     private val topic = "assignment/location"
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -202,32 +202,32 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
     override fun onMapReady(map: GoogleMap) {
         Log.d("SubscriberApp", "Google Map is ready.")
         googleMap = map
-        mapManager = MapManager(googleMap)
 
-        // Set the date range for location data
-        val endDate = System.currentTimeMillis()
-        val startDate = endDate - 86400000L // 24 hours ago
+        // Fetch location data for all devices and plot their paths
         val studentIds = databaseHelper.getAllStudentIds()
         Log.d("SubscriberApp", "Fetched ${studentIds.size} student devices for path rendering.")
 
         for (studentId in studentIds) {
-            val locations = databaseHelper.getLocationDataForDevice(studentId, startDate, endDate)
+            val locations = databaseHelper.getLocationDataForDevice(studentId)
             if (locations.isEmpty()) {
                 Log.w("SubscriberApp", "No location data found for student ID: $studentId")
             } else {
-                val pathData = locations.map { Pair(it.latitude, it.longitude) }
-                mapManager.addDevicePath(studentId, pathData)
+                val pathData = locations.map { LatLng(it.latitude, it.longitude) }
+                drawPolylineOnMap(pathData)
             }
         }
-
-        // Plot device paths on map
-        plotDevicePaths()
     }
 
-    override fun onDestroy() {
-        super.onDestroy()
-        Log.d("SubscriberApp", "Activity destroyed, disconnecting from broker...")
-        disconnectFromBroker()
+    private fun drawPolylineOnMap(pathPoints: List<LatLng>) {
+        if (pathPoints.isNotEmpty()) {
+            val polylineOptions = PolylineOptions().addAll(pathPoints).color(Color.BLUE).width(5f)
+            googleMap.addPolyline(polylineOptions)
+
+            // Optionally, move the camera to show the entire path
+            val bounds = LatLngBounds.builder()
+            pathPoints.forEach { bounds.include(it) }
+            googleMap.moveCamera(CameraUpdateFactory.newLatLngBounds(bounds.build(), 50))
+        }
     }
 
     private fun loadDevices() {
@@ -247,17 +247,10 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback {
         startActivity(intent)
     }
 
-    private fun plotDevicePaths() {
-        val devices = databaseHelper.getAllDevices()
-        for (device in devices) {
-            val pathPoints = databaseHelper.getDevicePath(device.studentId)
-            drawPolylineOnMap(pathPoints)
-        }
-    }
-
-    private fun drawPolylineOnMap(pathPoints: List<LatLng>) {
-        val polylineOptions = PolylineOptions().addAll(pathPoints).color(Color.BLUE).width(5f)
-        googleMap.addPolyline(polylineOptions)
+    override fun onDestroy() {
+        super.onDestroy()
+        Log.d("SubscriberApp", "Activity destroyed, disconnecting from broker...")
+        disconnectFromBroker()
     }
 
     private fun disconnectFromBroker() {
