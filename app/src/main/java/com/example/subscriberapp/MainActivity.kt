@@ -1,116 +1,272 @@
 package com.example.subscriberapp
 
+import android.content.Intent
+import android.graphics.Color
 import android.os.Bundle
 import android.util.Log
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
-import org.json.JSONObject
-import java.util.UUID
-import com.hivemq.client.mqtt.mqtt5.Mqtt5AsyncClient
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
+import com.google.android.gms.maps.GoogleMap
+import com.google.android.gms.maps.OnMapReadyCallback
+import com.google.android.gms.maps.SupportMapFragment
+import com.google.android.gms.maps.model.LatLng
+import com.google.android.gms.maps.model.PolylineOptions
+import com.hivemq.client.mqtt.MqttGlobalPublishFilter
+import com.hivemq.client.mqtt.mqtt5.Mqtt5BlockingClient
 import com.hivemq.client.mqtt.mqtt5.Mqtt5Client
+import com.hivemq.client.mqtt.mqtt5.exceptions.Mqtt5ConnAckException
+import kotlinx.coroutines.*
+import java.util.UUID
 
+class MainActivity : AppCompatActivity(), OnMapReadyCallback {
 
-class MainActivity : AppCompatActivity() {
-
-    private var client: Mqtt5AsyncClient? = null
+    private var client: Mqtt5BlockingClient? = null
+    private lateinit var mapManager: MapManager
+    private lateinit var googleMap: GoogleMap
     private lateinit var databaseHelper: DatabaseHelper
+    private lateinit var recyclerView: RecyclerView
+    private lateinit var deviceAdapter: DeviceAdapter
+
+    private lateinit var deviceList: List<Device>
+
+    private val topic = "assignment/location"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        Log.d("SubscriberApp", "App started, initializing...")
+
         // Initialize the database helper for SQLite
         databaseHelper = DatabaseHelper(this)
 
-        // Configure the MQTT client
+        // Initialize RecyclerView
+        recyclerView = findViewById(R.id.deviceListRecyclerView)
+        recyclerView.layoutManager = LinearLayoutManager(this)
+
+        Log.d("SubscriberApp", "RecyclerView initialized.")
+
+        // Fetch device stats and populate the list
+        deviceList = getDeviceList()
+        deviceAdapter = DeviceAdapter(deviceList) { studentId ->
+            navigateToReportScreen(studentId)
+        }
+        recyclerView.adapter = deviceAdapter
+
+        // Initialize Google Maps
+        val mapFragment = supportFragmentManager.findFragmentById(R.id.map) as SupportMapFragment
+        mapFragment.getMapAsync(this)
+
+        // Configure and connect the MQTT client
+        setupMqttClient()
+        connectToBroker()
+    }
+
+    private fun getDeviceList(): List<Device> {
+        val devices = mutableListOf<Device>()
+        val studentIds = databaseHelper.getAllStudentIds()
+
+        // Set the date range (e.g., last 24 hours)
+        val endDate = System.currentTimeMillis()  // Current time
+        val startDate = endDate - 86400000L // 24 hours ago
+
+        for (studentId in studentIds) {
+            val stats = databaseHelper.getSpeedStatsForDevice(studentId, startDate, endDate)
+            devices.add(Device(studentId, stats.minSpeed, stats.maxSpeed))
+        }
+        return devices
+    }
+
+    private fun setupMqttClient() {
         client = Mqtt5Client.builder()
             .identifier(UUID.randomUUID().toString())
             .serverHost("broker-816034662.sundaebytestt.com")
             .serverPort(1883)
-            .buildAsync()
-
-        // Connect to the broker and subscribe to the topic
-        connectToBroker()
+            .build()
+            .toBlocking()
     }
 
     private fun connectToBroker() {
+        Log.d("SubscriberApp", "Attempting to connect to broker...")
         try {
-            Log.d("SubscriberApp-ConnectBroker", "Connecting to broker...")
             client?.connect()
-            Log.d("SubscriberApp-ConnectBroker", "Connected to broker")
+            Log.d("SubscriberApp", "Connected to broker successfully")
             Toast.makeText(this, "Connected to broker", Toast.LENGTH_SHORT).show()
-
-            // Subscribe to the "assignment/location" topic
-            subscribeToTopic("assignment/location")
+            subscribeToTopic(topic)
+        } catch (e: Mqtt5ConnAckException) {
+            Log.e("SubscriberApp", "Connection rejected: ${e.message}", e)
+            Toast.makeText(this, "Connection rejected: ${e.message}", Toast.LENGTH_LONG).show()
         } catch (e: Exception) {
-            Toast.makeText(this, "An error occurred when connecting to broker", Toast.LENGTH_SHORT).show()
-            Log.e("SubscriberApp-ConnectBroker", "Error connecting to broker", e)
+            Log.e("SubscriberApp", "Error connecting to broker", e)
+            Toast.makeText(this, "Error connecting to broker", Toast.LENGTH_SHORT).show()
         }
     }
 
     private fun subscribeToTopic(topic: String) {
-        client?.let { mqttClient ->
-            mqttClient.connectWith()
-                .send()
-                .whenComplete { _, throwable ->
-                    if (throwable == null) {
-                        Log.d("SubscriberApp-ConnectBroker", "Connected to broker")
-                        Toast.makeText(this, "Connected to broker", Toast.LENGTH_SHORT).show()
+        try {
+            // Subscribe to the topic
+            client?.subscribeWith()
+                ?.topicFilter(topic)
+                ?.qos(com.hivemq.client.mqtt.datatypes.MqttQos.AT_LEAST_ONCE)
+                ?.send()
+            Log.d("SubscriberApp", "Subscribed to topic: $topic")
 
-                        mqttClient.subscribeWith()
-                            .topicFilter(topic)
-                            .callback { publish ->
-                                val message = String(publish.payloadAsBytes, Charsets.UTF_8)
-                                Log.d("SubscriberApp-Message", "Received message: $message")
-                                handleIncomingMessage(message)
+            // Start listening for messages in a background thread
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    client?.publishes(MqttGlobalPublishFilter.ALL)?.use { publishes ->
+                        while (true) {
+                            val publish = publishes.receive() // Blocking call to receive messages
+                            val payload = publish.payload.orElse(null)?.let { buffer ->
+                                val byteArray = ByteArray(buffer.remaining())
+                                buffer.get(byteArray)
+                                byteArray
                             }
-                            .send()
-                            .whenComplete { _, subscribeThrowable ->
-                                if (subscribeThrowable == null) {
-                                    Log.d("SubscriberApp-Subscribe", "Subscribed to topic: $topic")
-                                } else {
-                                    Log.e("SubscriberApp-Subscribe", "Error subscribing to topic", subscribeThrowable)
+
+                            val message = payload?.let { String(it, Charsets.UTF_8) }
+                            if (message != null) {
+                                Log.d("SubscriberApp", "Received message: $message")
+                                withContext(Dispatchers.Main) {
+                                    handleIncomingMessage(message)
                                 }
                             }
-                    } else {
-                        Log.e("SubscriberApp-ConnectBroker", "Error connecting to broker", throwable)
+                        }
                     }
+                } catch (e: Exception) {
+                    Log.e("SubscriberApp", "Error receiving messages", e)
                 }
+            }
+        } catch (e: Exception) {
+            Log.e("SubscriberApp", "Error subscribing to topic", e)
+            Toast.makeText(this, "Error subscribing to topic", Toast.LENGTH_SHORT).show()
+            retrySubscription(topic)
+        }
+    }
+
+    private fun retrySubscription(topic: String) {
+        GlobalScope.launch {
+            delay(3000) // Retry after 3 seconds
+            Log.d("SubscriberApp", "Retrying subscription to topic: $topic")
+            Toast.makeText(this@MainActivity, "Retrying subscription...", Toast.LENGTH_SHORT).show()
+            subscribeToTopic(topic)
         }
     }
 
     private fun handleIncomingMessage(message: String) {
+        Log.d("SubscriberApp", "Received MQTT message: $message")
         try {
-            // Parse the message assuming it's in JSON format
-            val jsonObject = JSONObject(message)
-            val studentId = jsonObject.getString("studentId")
-            val speed = jsonObject.getDouble("speed")
-            val timestamp = jsonObject.getLong("timestamp")
-            val latitude = jsonObject.getDouble("latitude")
-            val longitude = jsonObject.getDouble("longitude")
+            val parts = message.split("|")
+            if (parts.size < 4) {
+                Log.e("SubscriberApp", "Invalid message format: $message")
+                return
+            }
 
-            // Save the data to the SQLite database
-            databaseHelper.insertLocationData(studentId, speed, timestamp, latitude, longitude)
-            Log.d("SubscriberApp-Database", "Data saved to SQLite: $message")
+            val studentId = parts[0].substringAfter(":").trim()
+            val speed = parts[1].substringAfter(":").substringBefore(" km/h").trim().toDouble()
+            val timestamp = parts[2].substringAfter(":").trim().toLong()
+            val locationParts = parts[3].substringAfter(":").split(",")
+            val latitude = locationParts[0].trim().toDouble()
+            val longitude = locationParts[1].trim().toDouble()
+
+            Log.d("SubscriberApp", "Parsed data - StudentId: $studentId, Speed: $speed, Timestamp: $timestamp, Latitude: $latitude, Longitude: $longitude")
+
+            // Perform database operation on a background thread
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    databaseHelper.insertLocationData(studentId, speed, timestamp, latitude, longitude)
+
+                    // On success, update the UI on the main thread
+                    withContext(Dispatchers.Main) {
+                        Log.d("SubscriberApp", "Data successfully stored in SQLite")
+                        Toast.makeText(this@MainActivity, "Data stored successfully", Toast.LENGTH_SHORT).show()
+                        loadDevices() // Refresh devices
+                        deviceList = getDeviceList()  // Re-fetch updated device list
+                        updateRecyclerView(deviceList) // Update RecyclerView
+                    }
+                } catch (e: Exception) {
+                    // Handle any errors that occurred during database insertion
+                    withContext(Dispatchers.Main) {
+                        Log.e("SubscriberApp", "Failed to store data in SQLite", e)
+                        Toast.makeText(this@MainActivity, "Failed to store data", Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
         } catch (e: Exception) {
-            Log.e("SubscriberApp-MessageHandler", "Error parsing or saving message data", e)
+            Log.e("SubscriberApp", "Error parsing or saving message data", e)
+            Toast.makeText(this@MainActivity, "Error processing data", Toast.LENGTH_SHORT).show()
         }
+    }
+
+    override fun onMapReady(map: GoogleMap) {
+        Log.d("SubscriberApp", "Google Map is ready.")
+        googleMap = map
+        mapManager = MapManager(googleMap)
+
+        // Set the date range for location data
+        val endDate = System.currentTimeMillis()
+        val startDate = endDate - 86400000L // 24 hours ago
+        val studentIds = databaseHelper.getAllStudentIds()
+        Log.d("SubscriberApp", "Fetched ${studentIds.size} student devices for path rendering.")
+
+        for (studentId in studentIds) {
+            val locations = databaseHelper.getLocationDataForDevice(studentId, startDate, endDate)
+            if (locations.isEmpty()) {
+                Log.w("SubscriberApp", "No location data found for student ID: $studentId")
+            } else {
+                val pathData = locations.map { Pair(it.latitude, it.longitude) }
+                mapManager.addDevicePath(studentId, pathData)
+            }
+        }
+
+        // Plot device paths on map
+        plotDevicePaths()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        Log.d("SubscriberApp", "Activity destroyed, disconnecting from broker...")
+        disconnectFromBroker()
+    }
+
+    private fun loadDevices() {
+        val devices = databaseHelper.getAllDevices()
+        if (devices.isNotEmpty()) {
+            updateRecyclerView(devices)
+        }
+    }
+
+    private fun updateRecyclerView(devices: List<Device>) {
+        deviceAdapter.updateDevices(devices)
+    }
+
+    private fun navigateToReportScreen(studentId: String) {
+        val intent = Intent(this, ReportActivity::class.java)
+        intent.putExtra("studentId", studentId)
+        startActivity(intent)
+    }
+
+    private fun plotDevicePaths() {
+        val devices = databaseHelper.getAllDevices()
+        for (device in devices) {
+            val pathPoints = databaseHelper.getDevicePath(device.studentId)
+            drawPolylineOnMap(pathPoints)
+        }
+    }
+
+    private fun drawPolylineOnMap(pathPoints: List<LatLng>) {
+        val polylineOptions = PolylineOptions().addAll(pathPoints).color(Color.BLUE).width(5f)
+        googleMap.addPolyline(polylineOptions)
     }
 
     private fun disconnectFromBroker() {
         try {
             client?.disconnect()
-            Toast.makeText(this, "Disconnected from broker", Toast.LENGTH_SHORT).show()
             Log.d("SubscriberApp", "Disconnected from broker")
+            Toast.makeText(this, "Disconnected from broker", Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
-            Toast.makeText(this, "An error occurred when disconnecting from broker", Toast.LENGTH_SHORT).show()
             Log.e("SubscriberApp", "Error disconnecting from broker", e)
         }
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        // Disconnect from the broker when the app is destroyed
-        disconnectFromBroker()
     }
 }

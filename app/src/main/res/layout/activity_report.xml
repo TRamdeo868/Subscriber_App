@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <!-- Title TextView -->
+    <TextView
+        android:id="@+id/titleTextView"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Summary of "
+        android:textSize="20sp"
+        android:textStyle="bold"
+        android:layout_marginBottom="16dp"/>
+
+    <!-- Device ID TextView -->
+    <TextView
+        android:id="@+id/deviceIdTextView"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Device ID: "
+        android:textSize="16sp"
+        android:layout_marginBottom="8dp"/>
+
+    <!-- Min Speed TextView -->
+    <TextView
+        android:id="@+id/minSpeedTextView"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Min Speed: "
+        android:textSize="16sp"
+        android:layout_marginBottom="8dp"/>
+
+    <!-- Max Speed TextView -->
+    <TextView
+        android:id="@+id/maxSpeedTextView"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Max Speed: "
+        android:textSize="16sp"
+        android:layout_marginBottom="8dp"/>
+
+    <!-- Avg Speed TextView -->
+    <TextView
+        android:id="@+id/avgSpeedTextView"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Avg Speed: "
+        android:textSize="16sp"
+        android:layout_marginBottom="16dp"/>
+
+    <!-- Time Period Selection Button -->
+    <Button
+        android:id="@+id/selectTimePeriodButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Select Time Period"
+        android:layout_marginBottom="16dp"/>
+
+    <!-- Map View -->
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="300dp"
+        android:layout_marginBottom="16dp">
+
+        <!-- Use SupportMapFragment instead of MapFragment -->
+        <fragment
+            android:id="@+id/mapView"
+            android:name="com.google.android.gms.maps.SupportMapFragment"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+    </FrameLayout>
+
+</LinearLayout>
